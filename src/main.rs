@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 #![warn(unused_variables)]
+use core::num;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngCore, SeedableRng};
+use rayon::{range_inclusive, vec};
 use std::cmp;
 use std::cmp::max;
 use std::collections::VecDeque;
@@ -9,7 +11,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::{self, BufRead, Write};
-use std::iter::zip;
 use std::time::Instant;
 
 #[inline]
@@ -286,13 +287,160 @@ impl Graph {
                 .collect();
 
             if numbers.len() == 2 {
-                self.add_edge(numbers[0], numbers[1]);
+                if numbers[0] < numbers[1] {
+                    self.add_edge(numbers[0], numbers[1]);
+                    self.add_edge(numbers[1], numbers[0]);
+                }
             } else {
                 println!("Skipping invalid line: {}", line);
             }
         }
         self.init();
         Ok(())
+    }
+
+    pub fn transform_to_dot_file(&self, file_path: &str) {
+        let mut file = File::create(file_path).expect("Unable to create file");
+        write!(file, "graph G {{ ").expect("unable to write to file");
+        for i in 0..self.inmap.len() {
+            for &j in &self.inmap[i] {
+                if i < j {
+                    writeln!(file, "{} -- {};", i, j).expect("Unable to write to file");
+                }
+            }
+        }
+        write!(file, "}}").expect("unable to write to file");
+    }
+
+    pub fn power_law(num_vertices: usize, edge_budget: usize) -> Self {
+        let mut g = Graph::new();
+        g.inmap.resize(num_vertices, Vec::new());
+
+        if num_vertices < 2 || edge_budget == 0 {
+            return g;
+        }
+
+        let max_edges = num_vertices * (num_vertices - 1) / 2;
+        let budget = edge_budget.min(max_edges);
+
+        let mut rng = SmallRng::from_os_rng();
+        let mut edges_added = 0;
+
+        /* fase 1: piccolo seed iniziale connesso */
+        g.add_edge(0, 1);
+        edges_added += 2;
+
+        /* vettore dei gradi, usato per il campionamento */
+        let mut degrees = vec![0usize; num_vertices];
+        degrees[0] = 1;
+        degrees[1] = 1;
+
+        /* fase 2: attaccamento preferenziale */
+        for v in 2..num_vertices {
+            if edges_added >= budget {
+                break;
+            }
+
+            /* somma dei gradi correnti */
+            let total_degree: usize = degrees[..v].iter().sum();
+            if total_degree == 0 {
+                continue;
+            }
+
+            /* selezione di un nodo proporzionale al grado */
+            let mut r = rng.random_range(0..total_degree);
+            let mut u = 0;
+
+            for i in 0..v {
+                if r < degrees[i] {
+                    u = i;
+                    break;
+                }
+                r -= degrees[i];
+            }
+
+            if !g.inmap[v].contains(&u) {
+                g.add_edge(v, u);
+                degrees[v] += 1;
+                degrees[u] += 1;
+                edges_added += 2;
+            }
+        }
+
+        /* fase 3: aggiunta di archi extra mantenendo il bias */
+        while edges_added < budget {
+            let total_degree: usize = degrees.iter().sum();
+            if total_degree == 0 {
+                break;
+            }
+
+            let pick = |rng: &mut SmallRng| -> usize {
+                let mut r = rng.random_range(0..total_degree);
+                for i in 0..num_vertices {
+                    if r < degrees[i] {
+                        return i;
+                    }
+                    r -= degrees[i];
+                }
+                num_vertices - 1
+            };
+
+            let u = pick(&mut rng);
+            let v = pick(&mut rng);
+
+            if u == v {
+                continue;
+            }
+
+            if g.inmap[u].contains(&v) {
+                continue;
+            }
+
+            g.add_edge(u, v);
+            degrees[u] += 1;
+            degrees[v] += 1;
+            edges_added += 2;
+        }
+
+        g.max_degree = g.inmap.iter().map(|v| v.len()).max().unwrap_or(0);
+        g
+    }
+
+    pub fn add_random_semi_cliques(
+        &mut self,
+        num_semicliques: usize,
+        clique_size_range: (usize, usize),
+        p_internal: f64,
+    ) {
+        let num_vertices = self.inmap.len();
+
+        let mut rng = SmallRng::from_os_rng();
+        /* fase 2: costruzione delle semi-cricche */
+        for _ in 0..num_semicliques {
+            let size = rng.random_range(clique_size_range.0..=clique_size_range.1);
+            let size = size.min(num_vertices);
+
+            let mut nodes = Vec::with_capacity(size);
+            while nodes.len() < size {
+                let v = rng.random_range(0..num_vertices);
+                if !nodes.contains(&v) {
+                    nodes.push(v);
+                }
+            }
+
+            for i in 0..nodes.len() {
+                for j in (i + 1)..nodes.len() {
+                    if rng.random::<f64>() < p_internal {
+                        let u = nodes[i];
+                        let v = nodes[j];
+
+                        if !self.inmap[u].contains(&v) {
+                            self.add_edge(u, v);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn add_edge(&mut self, i: usize, j: usize) {
@@ -303,6 +451,212 @@ impl Graph {
 
         self.inmap[i].push(j);
         self.inmap[j].push(i);
+    }
+
+    pub fn random(num_vertices: usize, num_edges: &mut usize, ensure_connected: bool) -> Self {
+        let mut g = Graph::new();
+
+        // inizializza i vettori di adiacenza
+        g.inmap.resize(num_vertices, Vec::new());
+
+        if *num_edges > num_vertices * (num_vertices - 1) / 2 {
+            *num_edges = num_vertices * (num_vertices - 1) / 2;
+        }
+
+        let mut rng = SmallRng::from_os_rng();
+        let mut edges_added = 0;
+
+        // fase 1: garantire la connettività (catena lineare)
+        if ensure_connected && num_vertices > 1 {
+            for i in 0..(num_vertices - 1) {
+                g.add_edge(i, i + 1);
+                edges_added += 1;
+            }
+        }
+
+        // fase 2: aggiunta di archi casuali
+        while edges_added < *num_edges {
+            let range = rng.random_range(0..num_vertices);
+            let i = rng.random_range(0..range + 1);
+            let j = rng.random_range(0..num_vertices);
+
+            if i == j {
+                continue;
+            }
+
+            // evita archi duplicati
+            if g.inmap[i].contains(&j) || g.inmap[j].contains(&i) {
+                continue;
+            }
+
+            g.add_edge(i, j);
+            edges_added += 2;
+        }
+
+        g.max_degree = g.inmap.iter().map(|v| v.len()).max().unwrap_or(0);
+
+        g
+    }
+
+    pub fn quasi_regular(num_vertices: usize, target_degree: usize) -> Self {
+        let mut g = Graph::new();
+        g.inmap.resize(num_vertices, Vec::new());
+
+        let mut rng = SmallRng::from_os_rng();
+
+        let max_edges = num_vertices * (num_vertices - 1) / 2;
+        let desired_edges = num_vertices * target_degree / 2;
+        let desired_edges = desired_edges.min(max_edges);
+
+        let mut edges_added = 0;
+
+        while edges_added < desired_edges {
+            let i = rng.random_range(0..num_vertices);
+            let j = rng.random_range(0..num_vertices);
+
+            if i == j {
+                continue;
+            }
+
+            if g.inmap[i].len() >= target_degree || g.inmap[j].len() >= target_degree {
+                continue;
+            }
+
+            if g.inmap[i].contains(&j) {
+                continue;
+            }
+
+            g.add_edge(i, j);
+            edges_added += 1;
+        }
+
+        g.max_degree = g.inmap.iter().map(|v| v.len()).max().unwrap_or(0);
+        g
+    }
+
+    pub fn dense_core_with_tails(core_size: usize, tail_length: usize, num_tails: usize) -> Self {
+        let num_vertices = core_size + num_tails * tail_length;
+        let mut g = Graph::new();
+        g.inmap.resize(num_vertices, Vec::new());
+
+        // core denso
+        for i in 0..core_size {
+            for j in (i + 1)..core_size {
+                g.add_edge(i, j);
+            }
+        }
+
+        // code
+        let mut current = core_size;
+        let mut rng = SmallRng::from_os_rng();
+        for _ in 0..num_tails {
+            let attach = rng.random_range(0..core_size);
+            g.add_edge(attach, current);
+
+            for i in 0..(tail_length - 1) {
+                g.add_edge(current + i, current + i + 1);
+            }
+
+            current += tail_length;
+        }
+
+        g.max_degree = g.inmap.iter().map(|v| v.len()).max().unwrap_or(0);
+        g
+    }
+
+    pub fn semi_clique_graph(
+        num_vertices: usize,
+        edge_budget: usize,
+        num_semicliques: usize,
+        p_internal: f64,
+        clique_size_range: (usize, usize),
+        num_hubs: usize,
+        p_hub: f64,
+    ) -> Self {
+        let mut g = Graph::new();
+        g.inmap.resize(num_vertices, Vec::new());
+
+        let max_edges = num_vertices * (num_vertices - 1) / 2;
+        let budget = edge_budget.min(max_edges);
+
+        let mut rng = SmallRng::from_os_rng();
+        let mut edges_added = 0;
+
+        /* fase 0: costruzione del grafo connesso */
+        for i in 0..(num_vertices - 1) {
+            g.add_edge(i, i + 1);
+            edges_added += 2;
+        }
+
+        /* fase 1: selezione degli hub */
+        let mut hubs = Vec::new();
+        let mut hubs_selected = 0;
+        while hubs_selected < num_hubs.min(num_vertices) {
+            let h = rng.random_range(0..num_vertices);
+            if !hubs.contains(&h) {
+                hubs.push(h);
+                hubs_selected += 1;
+            }
+        }
+
+        /* fase 2: costruzione delle semi-cricche */
+        for _ in 0..num_semicliques {
+            if edges_added >= budget {
+                break;
+            }
+
+            let size = rng.random_range(clique_size_range.0..=clique_size_range.1);
+            let size = size.min(num_vertices);
+
+            let mut nodes = Vec::with_capacity(size);
+            while nodes.len() < size {
+                let v = rng.random_range(0..num_vertices);
+                if !nodes.contains(&v) {
+                    nodes.push(v);
+                }
+            }
+
+            for i in 0..nodes.len() {
+                for j in (i + 1)..nodes.len() {
+                    if edges_added >= budget {
+                        break;
+                    }
+
+                    if rng.random::<f64>() < p_internal {
+                        let u = nodes[i];
+                        let v = nodes[j];
+
+                        if !g.inmap[u].contains(&v) {
+                            g.add_edge(u, v);
+                            edges_added += 2;
+                        }
+                    }
+                }
+            }
+        }
+
+        /* fase 3: connessioni degli hub */
+        for &h in &hubs {
+            for v in 0..num_vertices {
+                if edges_added >= budget {
+                    break;
+                }
+
+                if h == v {
+                    continue;
+                }
+
+                if rng.gen::<f64>() < p_hub {
+                    if !g.inmap[h].contains(&v) {
+                        g.add_edge(h, v);
+                        edges_added += 2;
+                    }
+                }
+            }
+        }
+
+        g.max_degree = g.inmap.iter().map(|v| v.len()).max().unwrap_or(0);
+        g
     }
 
     /// Rimuove i duplicati da `inmap` e setta `max_degree` al grado massimo
@@ -796,7 +1150,12 @@ impl Graph {
         est
     }
 
-    pub fn compute_coreness_iter_sync_opti2(&mut self, factors: (f64, f64)) -> Vec<usize> {
+    pub fn compute_coreness_iter_sync_opti2(
+        &mut self,
+        factors: (f64, f64),
+        archi: &mut f64,
+        debug: bool,
+    ) -> Vec<usize> {
         let mut est: Vec<usize> = vec![0; self.inmap.len()];
         let mut stability: Vec<isize> = vec![-1; self.inmap.len()];
 
@@ -832,7 +1191,6 @@ impl Graph {
         for i in 0..self.inmap.len() {
             priority_queue.push(est[i], i);
         }
-        println!("Tempo inizializzazione: {:?}", start.elapsed());
 
         let mut equal_estimates = 0;
         let mut final_step = false;
@@ -939,16 +1297,19 @@ impl Graph {
                 }
             }
         }
+        if debug {
+            println!("---Stability--- [{}, {}]", factors.0, factors.1);
+            println!("Tempo: {:?}", start.elapsed());
+            println!(
+                "Elaborazioni: {}, Cambiamenti: {}, Archi analizzati: {}, Stime uguali: {}",
+                elaborazioni as f64 / self.inmap.len() as f64,
+                changes as f64 / elaborazioni as f64,
+                archi_analizzati as f64 / self.inmap.iter().map(|v| v.len()).sum::<usize>() as f64,
+                equal_estimates,
+            );
+        }
 
-        println!("---Stability--- [{}, {}]", factors.0, factors.1);
-        println!("Tempo: {:?}", start.elapsed());
-        println!(
-            "Elaborazioni: {}, Cambiamenti: {}, Archi analizzati: {}, Stime uguali: {}",
-            elaborazioni as f64 / self.inmap.len() as f64,
-            changes as f64 / elaborazioni as f64,
-            archi_analizzati as f64 / self.inmap.iter().map(|v| v.len()).sum::<usize>() as f64,
-            equal_estimates,
-        );
+        *archi = archi_analizzati as f64 / self.inmap.iter().map(|v| v.len()).sum::<usize>() as f64;
         let mut archi_per_elaborazioni = Vec::new();
         let mut count_elaborazioni = Vec::new();
         for (i, &elab) in elaborations.iter().enumerate() {
@@ -1968,7 +2329,7 @@ pub fn write_file(coreness: Vec<usize>, file_path: &str) -> Result<(), std::io::
     let file = File::create(file_path)?;
     let mut bufwriter = BufWriter::new(file);
     for &core in coreness.iter() {
-        bufwriter.write(format!("{}", core).as_bytes())?;
+        bufwriter.write(format!("{}\n", core).as_bytes())?;
     }
     Ok(())
 }
@@ -1976,6 +2337,8 @@ pub fn write_file(coreness: Vec<usize>, file_path: &str) -> Result<(), std::io::
 fn main() -> io::Result<()> {
     // gestione argomenti passati da linea di comando: in_file (file da parsare) e out_file (file su cui scrivere la coreness dei nodi)
     let args: Vec<String> = std::env::args().collect();
+    sgama_grafi();
+    return Ok(());
     if args.len() < 3 || args.len() > 5 {
         println!("2 argomenti: file di input e file in cui scrivere, -t opzionale per settare il numero di thread");
         return Ok(());
@@ -1986,9 +2349,32 @@ fn main() -> io::Result<()> {
 
     let mut coreness: Vec<usize> = Vec::new();
     let mut start = Instant::now();
-    let mut graph = Graph::new();
-    graph.read_file(in_file)?;
+    //let mut graph = Graph::new();
+    //graph.read_file(in_file)?;
+
+    let mut edges = 3000;
+    let nodes = 150;
+
+    let num_semicliques = 10;
+    let p_internal = 0.9;
+    let clique_size_range = (20, 30);
+    let num_hubs = 2;
+    let p_hub = 0.5;
+
+    let mut graph = Graph::semi_clique_graph(
+        nodes,
+        edges,
+        num_semicliques,
+        p_internal,
+        clique_size_range,
+        num_hubs,
+        p_hub,
+    );
     println!("Grafo caricato in {:?}", start.elapsed());
+
+    graph.transform_to_dot_file("./random.dot");
+    graph.standardize_graph("./standardized_random.txt")?;
+
     // leggo il secondo argomento e metto nel vettore coreness quello che leggo su ogni riga
     let reader = BufReader::new(File::open(out_file)?);
 
@@ -2000,43 +2386,110 @@ fn main() -> io::Result<()> {
     }
 
     println!("Per parsare i file: {:?}", start.elapsed());
+    println!(
+        "Numero di nodi: {}, Numero di archi: {} / {}",
+        graph.inmap.len(),
+        graph.inmap.iter().map(|v| v.len()).sum::<usize>(),
+        nodes * (nodes - 1) / 2
+    );
 
-    let vgc_values = [0];
-    let factors = [
-        (1.0, 100.0),
-        (1.0, 9.0),
-        (1.0, 5.0),
-        (1.0, 3.0),
-        (1.0, 2.0),
-        (2.0, 3.0),
-        (1.0, 0.0),
-    ];
-    let mut total_diff = 0;
+    let factors = [(1.0, 0.0)];
+    let mut archi_analizzati: f64 = 0.0;
+    for &factors in &factors {
+        let core = graph.compute_coreness_iter_sync_opti2(factors, &mut archi_analizzati, true);
 
-    let mut errors = 0;
+        //coreness massima e media
+        let max_coreness = core.iter().max().unwrap();
+        let avg_coreness = core.iter().sum::<usize>() as f64 / core.len() as f64;
+        let avg_degree = edges as f64 / nodes as f64;
+        let max_degree = graph.max_degree;
+        println!(
+            "Coreness massima: {}, Coreness media: {}, Grado medio: {}, Grado massimo: {}",
+            max_coreness, avg_coreness, avg_degree, max_degree
+        );
+        write_file(core, "./coree.txt")?
+    }
 
-    for &vgc in &vgc_values {
-        for &factors in &factors {
-            let core = graph.compute_coreness_iter_sync_opti2(factors);
-            // controllo se è uguale a coreness
-            let mut different = 0;
+    Ok(())
+}
 
-            for (i, (&a, &b)) in zip(core.iter(), coreness.iter()).enumerate() {
-                let dif = a != b;
-                different += dif as usize;
-                if a > b {
-                    errors += 1;
+fn sgama_grafi() {
+    let scale = 5.0;
+    let nodes = (50 as f64 * scale) as usize;
+    let initial_edges = nodes;
+    let mut budget;
+
+    let times = 100;
+
+    let max_edges = (((nodes * (nodes - 1)) / 2) - initial_edges) / times;
+
+    let mut archi = 0.0;
+    let mut core = Vec::new();
+    let mut best_graph = Graph::new();
+    let mut max = 0.0;
+    let mut iter: usize = 100;
+
+    let mut cliques = vec![0, 1, 2, 3, 4, 5];
+    cliques = cliques
+        .iter()
+        .map(|x| (*x as f64 * scale) as usize)
+        .collect::<Vec<usize>>();
+
+    let mut ranges: Vec<(usize, usize)> = vec![(3, 5), (5, 7), (6, 9), (8, 11), (10, 14)];
+    ranges = ranges
+        .iter()
+        .map(|&(a, b)| ((a as f64 * scale) as usize, (b as f64 * scale) as usize))
+        .collect();
+
+    let mut rng = SmallRng::from_os_rng();
+
+    let mut graph;
+    for i in 0..=times {
+        for _ in 0..iter {
+            let cliques_id = rng.random_range(0..cliques.len());
+            let clique_size_range = ranges[rng.random_range(0..ranges.len())];
+
+            let num_cliques = cliques[cliques_id];
+            let p_internal = 0.8;
+
+            budget = initial_edges + max_edges * i;
+
+            budget -= cliques[cliques_id] * (clique_size_range.1 + (clique_size_range.1)) / 2;
+            budget = budget.min((nodes * (nodes - 1)) / 2);
+            budget = budget.max(nodes - 1);
+
+            iter += 1;
+            graph = Graph::power_law(nodes, budget);
+
+            graph.add_random_semi_cliques(num_cliques, clique_size_range, p_internal);
+
+            core = graph.compute_coreness_iter_sync_opti2((1.0, 0.0), &mut archi, false);
+            if archi > max {
+                best_graph = graph;
+                max = archi;
+                println!(
+                    "Nuovo massimo di archi analizzati / archi: {} (N:{}, E:{}) (Cricche: {}, Size: {:?})",
+                    max, nodes, budget, num_cliques, clique_size_range
+                );
+                if max > 4.5 {
+                    break;
                 }
-                if dif && different <= 10 {
-                    println!("Nodo {}: calcolato {}, atteso {}", i, a, b);
-                }
-            }
-
-            total_diff += different;
-            if different != 0 {
-                println!("[VGC {}]: {}, {}", vgc, total_diff, errors);
             }
         }
     }
-    Ok(())
+
+    let core = best_graph.compute_coreness_iter_sync_opti2((1.0, 0.0), &mut archi, true);
+    write_file(core, "./core.txt").unwrap();
+
+    best_graph.transform_to_dot_file("./random.dot");
+    best_graph
+        .standardize_graph("./standardized_random.txt")
+        .unwrap();
+
+    println!(
+        "Numero di nodi: {}, Numero di archi: {} / {}",
+        best_graph.inmap.len(),
+        best_graph.inmap.iter().map(|v| v.len()).sum::<usize>(),
+        nodes * (nodes - 1) / 2
+    );
 }

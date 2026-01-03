@@ -1,0 +1,16 @@
+Dataset: LiveJournal1, sinaweibo, tech-p2p, pokec, (bn-human), (web-uk), (web-webbase), orkut. (8 graphs).
+
+inviare i grafi su titanic, solo graph.txt, compressi
+
+speedup on all with [1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128]
+
+script python della topologia: pinning vs no pinning [per tutte le configurazioni di thread]
+
+speedup on all with best pinning strategy
+
+hyperthreading vs no hyperthreading (pin numanode 1, 8 thread hyperthreading vs 8 thread fisici) (parametri: batch size, batches per subiteration, vgc)
+
+cluster vs no cluster ()
+
+vgc vs no vgc ()
+

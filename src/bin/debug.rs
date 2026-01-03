@@ -3,6 +3,7 @@
 // priority_queue.rs  — versione estesa con benchmark mapper vs no-mapper
 use concurrent_queue::ConcurrentQueue;
 use std::cell::UnsafeCell;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::BufRead;
@@ -33,9 +34,9 @@ pub mod estab {
     pub const SHIFT: usize = 32;
 
     // estimate: 31 bit value + 1 bit spec flag (MSB of low 32)
-    pub const EST_FLAG_MASK: usize = 0x8000_0000;       // MSB of low dword
-    pub const EST_VALUE_MASK: usize = 0x7FFF_FFFF;      // lower 31 bits for estimate value
-    pub const EST_FIELD_MASK: usize = 0xFFFF_FFFF;      // whole low dword (flag + value)
+    pub const EST_FLAG_MASK: usize = 0x8000_0000; // MSB of low dword
+    pub const EST_VALUE_MASK: usize = 0x7FFF_FFFF; // lower 31 bits for estimate value
+    pub const EST_FIELD_MASK: usize = 0xFFFF_FFFF; // whole low dword (flag + value)
     pub const STAB_MASK: usize = 0xFFFF_FFFF_0000_0000; // high dword
 
     // ---------- pack/unpack con stability con segno (i32) ----------
@@ -216,7 +217,8 @@ impl InfoStore {
 
     #[inline(always)]
     pub fn store_estab(&self, id: usize, (estimate, stability): (u32, i32)) {
-        self.estimate_stability[id].store(estab::pack(stability, estimate, false), Ordering::Relaxed);
+        self.estimate_stability[id]
+            .store(estab::pack(stability, estimate, false), Ordering::Relaxed);
     }
 
     /// Aggiorna estimate a new_est e stability a curr_stab + (new_stab - old_stab).
@@ -394,7 +396,14 @@ impl DualLocalPQ {
     /// Inserisce un nodo in current o next a seconda di last_update.
     /// Se last_update == iteration, inserisce in next, altrimenti in current.
     #[inline]
-    pub fn push_node(&mut self, level: usize, node: usize, edges: usize, last_update: u16, iteration: u16) {
+    pub fn push_node(
+        &mut self,
+        level: usize,
+        node: usize,
+        edges: usize,
+        last_update: u16,
+        iteration: u16,
+    ) {
         if last_update == iteration {
             self.next_mut().push_node(level, node, edges);
         } else {
@@ -439,7 +448,7 @@ impl LocalPQ {
             current_batch: Batch {
                 prio: 0,
                 edges: 0,
-                nodes: Vec::with_capacity(budget.max_nodes),
+                nodes: VecDeque::with_capacity(budget.max_nodes),
             },
             edges: 0,
         }
@@ -449,6 +458,7 @@ impl LocalPQ {
             self.shared_pq.push_batch(level, batch);
         }
         for (level, batch) in self.pq.iter_mut().enumerate() {
+            self.bitmap.clear_bucket(level);
             if level > cutoff {
                 break;
             }
@@ -473,31 +483,46 @@ impl LocalPQ {
     }
 
     #[inline]
+    pub fn pop_first(&mut self, prio: usize) -> Option<usize> {
+        // controllo se ci sono nodi nell'open batch, altrimenti provo a prenderne uno dalla shared pq
+        if let Some(node) = self.current_batch.nodes.pop_front() {
+            return Some(node);
+        } else {
+            if let Some(level) = self.bitmap.first_set_at_most(prio) {
+                self.current_batch = self.pq[level].take().unwrap();
+                self.edges += self.current_batch.edges;
+                self.bitmap.clear_bucket(level);
+            } else {
+                self.current_batch = self.shared_pq.pop_batch(prio)?;
+            }
+        }
+        self.current_batch.nodes.pop_front()
+    }
+
+    #[inline]
     pub fn pop_node(&mut self, prio: usize) -> Option<usize> {
         // controllo se ci sono nodi nell'open batch, altrimenti provo a prenderne uno dalla shared pq
-        if let Some(node) = self.current_batch.nodes.pop() {
+        if let Some(node) = self.current_batch.nodes.pop_front() {
             return Some(node);
         } else {
             self.current_batch = self.shared_pq.pop_batch(prio)?;
-            self.edges += self.current_batch.edges;
         }
-        self.current_batch.nodes.pop()
+        self.current_batch.nodes.pop_front()
     }
 
     pub fn push_node(&mut self, level: usize, node: usize, edges: usize) {
-
         // inserisco direttamente nel current batch se VGC attivo e soglia non superata
         if self.vgc_enabled && self.vgc_current < self.vgc_threshold {
-            self.edges += edges;
-            self.current_batch.nodes.push(node);
+            self.current_batch.nodes.push_front(node);
             self.vgc_current += 1;
+            self.edges += edges;
             return;
         }
         let bucket = self.mapper.map(level);
         self.bitmap.set_bucket(bucket);
         if self.pq[bucket].is_none() {
-            let mut nodes = Vec::with_capacity(128);
-            nodes.push(node);
+            let mut nodes = VecDeque::with_capacity(128);
+            nodes.push_back(node);
             self.pq[bucket] = Some(Batch {
                 prio: bucket,
                 edges: edges,
@@ -510,6 +535,8 @@ impl LocalPQ {
                 self.closed_batches
                     .push((bucket, self.pq[bucket].take().unwrap()));
             }
+
+            self.bitmap.clear_bucket(bucket);
         }
     }
 }
@@ -635,7 +662,7 @@ impl ExpoSubBuckets {
 pub struct Batch {
     pub prio: usize,
     pub edges: usize,
-    pub nodes: Vec<usize>,
+    pub nodes: VecDeque<usize>,
 }
 
 impl Batch {
@@ -645,7 +672,7 @@ impl Batch {
 
     #[inline]
     pub fn push_node(&mut self, node: usize, edges: usize) {
-        self.nodes.push(node);
+        self.nodes.push_back(node);
         self.edges += edges;
     }
 
@@ -960,8 +987,10 @@ impl Graph {
                 continue;
             }
             max_node = max_node.max(u).max(v);
-            edges.push((u, v));
-            edges.push((v, u));
+            if u < v {
+                edges.push((u, v));
+                edges.push((v, u));
+            }
         }
 
         let num_nodes = max_node + 1;
@@ -987,7 +1016,6 @@ impl Graph {
             neighbors[fill[u as usize] as usize] = v;
             fill[u as usize] += 1;
         }
-
 
         Graph {
             num_nodes,
@@ -1118,6 +1146,7 @@ pub fn thread_routine(
         vgc_enabled,
         vgc_threshold,
     );
+    local_queues.current_mut().vgc_current = vgc_threshold;
 
     let n = info.num_nodes;
     let chunk = (n + num_threads - 1) / num_threads;
@@ -1172,26 +1201,44 @@ pub fn thread_routine(
             subiter += 1;
             let prio = current_priority.load(Ordering::Relaxed);
             let max_prio = mapper.bucket_span(prio).1;
-            // estraggo batch dalla coda condivisa
 
-            while let Some(u) = local_queues.current_mut().pop_node(prio) {
-                info.set_last_update(u, iter);
-                edges += info.degree_of(u) as usize;
-                compute_index(
-                    u,
-                    &info,
-                    offsets,
-                    neighbors,
-                    &mut count,
-                    &mut temp,
-                    max_prio,
-                    &mut counter,
-                    iter,
-                    &mut local_queues,
-                );
+            // estraggo batch dalla coda condivisa
+            if vgc_threshold == 1 {
+                while let Some(u) = local_queues.current_mut().pop_first(prio) {
+                    info.set_last_update(u, iter);
+                    edges += info.degree_of(u) as usize;
+                    compute_index(
+                        u,
+                        &info,
+                        offsets,
+                        neighbors,
+                        &mut count,
+                        &mut temp,
+                        max_prio,
+                        &mut counter,
+                        iter,
+                        &mut local_queues,
+                    );
+                }
+            } else {
+                while let Some(u) = local_queues.current_mut().pop_node(prio) {
+                    info.set_last_update(u, iter);
+                    edges += info.degree_of(u) as usize;
+                    compute_index(
+                        u,
+                        &info,
+                        offsets,
+                        neighbors,
+                        &mut count,
+                        &mut temp,
+                        max_prio,
+                        &mut counter,
+                        iter,
+                        &mut local_queues,
+                    );
+                }
             }
 
-            
             phase_barrier.wait();
             local_queues.current_mut().flush(usize::MAX);
 
@@ -1205,12 +1252,14 @@ pub fn thread_routine(
                 if let Some(p) = new_prio {
                     current_priority.store(p, Ordering::Relaxed);
                 } else {
-                    // println!(
-                    //     "Iterazione: {}, archi: {}",
-                    //     iter,
-                    //     edges_processed.load(Ordering::Relaxed) as f64
-                    //         / offsets[offsets.len() - 1] as f64
-                    // );
+                    /*
+                    println!(
+                        "Iterazione: {}, archi: {}",
+                        iter,
+                        edges_processed.load(Ordering::Relaxed) as f64
+                            / offsets[offsets.len() - 1] as f64
+                    );
+                    */
                     end_iteration.store(true, Ordering::Relaxed);
                 }
             }
@@ -1238,9 +1287,9 @@ pub fn thread_routine(
         }
         phase_barrier.wait();
     }
+    counter += local_queues.current_mut().edges;
+    counter += local_queues.next_mut().edges;
     current_priority.fetch_add(counter, Ordering::Relaxed);
-    //edges += local_queues.current_mut().edges;
-    //edges += local_queues.next_mut().edges;
     edges_processed.fetch_add(edges, Ordering::Relaxed);
     let mut vgc_t = vgc_threshold;
 
@@ -1250,27 +1299,18 @@ pub fn thread_routine(
 
     if threads_working.fetch_sub(1, Ordering::Relaxed) == 1 {
         println!(
-            "[VGC: {}] Archi: {}, iterazioni: {}, sottoiterazioni totali: {}, archi risparmiati: {}",
+            "[VGC: {}] Archi: {}, iterazioni: {}, sottoiterazioni totali: {}, archi anticipati: {}",
             vgc_t,
             edges_processed.load(Ordering::Relaxed) as f64 / offsets[offsets.len() - 1] as f64,
             iter,
             subiter,
-            current_priority.load(Ordering::Relaxed) 
+            current_priority.load(Ordering::Relaxed) as f64 / offsets[offsets.len() - 1] as f64
         );
         println!(
             "Tempo: {:?} ({} archi/µs)",
             start_t.elapsed(),
             (edges_processed.load(Ordering::Relaxed) / start_t.elapsed().as_micros() as usize)
         );
-        let mut nodes = 0;
-        for u in 0..info.num_nodes {
-            let estab = info.load_estab(u, Ordering::Relaxed);
-            let k = estab::stability(estab);
-            if k < 0 && estab::estimate(estab) >= 2 {
-                nodes += 1;
-            }
-        }
-        println!("Nodi con stima non stabile: {}", nodes);
     }
 }
 
@@ -1306,26 +1346,29 @@ fn main() -> std::io::Result<()> {
 
     println!("Per parsare il file: {:?}", start.elapsed());
 
-    let vgc_values = [0, 32, 256, 1024, 4096, 16384];
-    let mut total_diff = 0;
+    let vgc_values = [0, 64, 256, 16384, 1_000_000_000];
+    let mut total_diff;
 
     for &vgc in &vgc_values {
+        total_diff = 0;
         for _ in 0..1 {
             let core = graph.fastk(num_threads, 128, true, vgc);
             // controllo se è uguale a coreness
             let mut different = 0;
 
-            for (i, (&a, &b)) in zip(core.iter(), coreness.iter()).enumerate() {
+            for (_i, (&a, &b)) in zip(core.iter(), coreness.iter()).enumerate() {
                 let dif = a != b;
                 different += dif as usize;
                 if dif {
-                    println!("Nodo {}: calcolato {}, atteso {}", i, a, b);
+                    // println!("Nodo {}: calcolato {}, atteso {}", i, a, b);
                 }
             }
-            
+
             total_diff += different;
         }
-        println!("[VGC {}]: {}", vgc, total_diff);
+        if total_diff != 0 {
+            println!("[VGC {}]: {}", vgc, total_diff);
+        }
     }
 
     Ok(())
@@ -1349,6 +1392,10 @@ pub fn compute_index(
     let k = estab::estimate(estab);
     if k >= count.len() as u32 {
         count.resize(k as usize + 1, 0);
+    }
+
+    if old_stab >= 0 {
+        *counter += 1;
     }
 
     count[..=k as usize].fill(0);
@@ -1393,7 +1440,13 @@ pub fn compute_index(
 
             if let Some((estab_v, crossed)) = result {
                 if crossed {
-                    dual.push_node(estab::estimate(estab_v) as usize, v, nodes.degree_of(v) as usize, nodes.get_last_update(v), iter);
+                    dual.push_node(
+                        estab::estimate(estab_v) as usize,
+                        v,
+                        nodes.degree_of(v) as usize,
+                        nodes.get_last_update(v),
+                        iter,
+                    );
                 }
             }
         }
@@ -1420,13 +1473,19 @@ pub fn compute_index(
 
         if let Some((estab_v, crossed)) = result {
             if crossed {
-                dual.push_node(estab::estimate(estab_v) as usize, v, nodes.degree_of(v) as usize, nodes.get_last_update(v), iter);
+                dual.push_node(
+                    estab::estimate(estab_v) as usize,
+                    v,
+                    nodes.degree_of(v) as usize,
+                    nodes.get_last_update(v),
+                    iter,
+                );
             }
         }
     }
 }
 
-fn write_to_file(path: &str, core: Vec<u32>) -> std::io::Result<()> {
+fn _write_to_file(path: &str, core: Vec<u32>) -> std::io::Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
