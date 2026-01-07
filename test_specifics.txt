@@ -10,7 +10,5 @@ speedup on all with best pinning strategy
 
 hyperthreading vs no hyperthreading (pin numanode 1, 8 thread hyperthreading vs 8 thread fisici) (parametri: batch size, batches per subiteration, vgc)
 
-cluster vs no cluster ()
-
 vgc vs no vgc ()
 

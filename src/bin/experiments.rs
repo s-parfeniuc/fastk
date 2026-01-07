@@ -1,6 +1,9 @@
 #![warn(dead_code)]
 
+use clap::Parser;
 use concurrent_queue::ConcurrentQueue;
+use core_affinity::CoreId;
+use fastk::pinning_arrays;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::fs::File;
@@ -15,6 +18,7 @@ use std::sync::{atomic::AtomicBool, Arc, Barrier};
 use std::thread;
 use std::time::Instant;
 use std::u16;
+
 #[inline(always)]
 fn neighbors_slice<'a>(offsets: &'a [u32], neighbors: &'a [u32], v: usize) -> &'a [u32] {
     let start = offsets[v];
@@ -398,15 +402,16 @@ impl DualLocalPQ {
     pub fn push_node(
         &mut self,
         level: usize,
+        old_prio: usize,
         node: usize,
         edges: usize,
         last_update: u16,
         iteration: u16,
     ) {
         if last_update == iteration {
-            self.next_mut().push_node(level, node, edges);
+            self.next_mut().push_node(level, old_prio, node, edges);
         } else {
-            self.current_mut().push_node(level, node, edges);
+            self.current_mut().push_node(level, old_prio, node, edges);
         }
     }
 }
@@ -509,15 +514,15 @@ impl LocalPQ {
         self.current_batch.nodes.pop_front()
     }
 
-    pub fn push_node(&mut self, level: usize, node: usize, edges: usize) {
+    pub fn push_node(&mut self, prio: usize, old_prio: usize, node: usize, edges: usize) {
         // inserisco direttamente nel current batch se VGC attivo e soglia non superata
-        if self.vgc_enabled && self.vgc_current < self.vgc_threshold {
+        if self.vgc_enabled && self.vgc_current < self.vgc_threshold && prio < old_prio {
             self.current_batch.nodes.push_front(node);
             self.vgc_current += 1;
             self.edges += edges;
             return;
         }
-        let bucket = self.mapper.map(level);
+        let bucket = self.mapper.map(prio);
         self.bitmap.set_bucket(bucket);
         if self.pq[bucket].is_none() {
             let mut nodes = VecDeque::with_capacity(128);
@@ -969,9 +974,14 @@ pub struct Graph {
     pub max_deg: u32,
     pub name: String,
 }
+
 impl Graph {
-    pub fn parse_file(path: &str) -> Self {
+    pub fn parse_file(path: &str, pinning: &[usize; 128]) -> Self {
         let file = BufReader::new(File::open(path).expect("File inesistente"));
+        if pinning[0] != usize::MAX {
+            pin_thread_strict(0, pinning);
+        }
+
         let mut edges: Vec<(u32, u32)> = vec![];
         let mut max_node = 0;
 
@@ -1053,12 +1063,23 @@ impl Graph {
         vgc_enabled: bool,
         vgc_threshold: usize,
         out_file: &str,
+        target_batches_per_subiter: usize,
+        pinning: &[usize; 128],
+        alg_name: &str,
     ) {
         let batch_budget = BatchBudget {
             min_nodes: 1,
             max_nodes: chunk_size, // cardinalità massima per batch
             max_edges: self.avg_deg as usize * chunk_size, // budget in archi per batch
         };
+
+        // Pinning del thread, perché alloca strutture dati condivise
+        #[cfg(target_os = "linux")]
+        {
+            if pinning[0] != usize::MAX {
+                pin_thread_strict(0, pinning);
+            }
+        }
 
         let mapper = ExpoSubBuckets::new(self.max_deg as usize, 512, 64);
 
@@ -1114,6 +1135,9 @@ impl Graph {
                         vgc_threshold,
                         out_file.to_string().clone(),
                         self.name.clone(),
+                        target_batches_per_subiter,
+                        &pinning,
+                        alg_name,
                     )
                 });
             }
@@ -1141,10 +1165,24 @@ pub fn thread_routine(
     vgc_threshold: usize,
     out_file: String,
     graph_name: String,
+    target_batches_per_subiter: usize,
+    pinning: &[usize; 128],
+    alg_name: &str,
 ) {
     //=================================================================
 
-    let target_batches_per_subiteration = num_threads * 1;
+    // Pinning..
+    if pinning[tid] != usize::MAX {
+        println!(
+            "Pinning thread {} to core {} != {}",
+            tid,
+            pinning[tid],
+            usize::MAX
+        );
+        pin_thread_strict(tid, pinning);
+    }
+
+    let target_batches_per_subiteration = num_threads * target_batches_per_subiter;
 
     // prefilling disgiunto per owner: nessuna barriera necessaria
     // ogni thread si prende una parte in base al proprio tid
@@ -1175,7 +1213,7 @@ pub fn thread_routine(
             info.set_last_update(u, 0);
             local_queues
                 .current_mut()
-                .push_node(deg as usize, u, info.degree_of(u) as usize);
+                .push_node(deg as usize, 0, u, info.degree_of(u) as usize);
         }
     }
     local_queues.current_mut().flush(usize::MAX);
@@ -1193,6 +1231,8 @@ pub fn thread_routine(
     let mut iter: u16 = 0;
     let mut counter: usize = 0;
     let mut edges = 0;
+    let mut prio = 0;
+
     loop {
         iter += 1;
         if terminate.load(Ordering::Relaxed) {
@@ -1209,7 +1249,9 @@ pub fn thread_routine(
             // Sottoiterazione
             //=========================================
             subiter += 1;
-            let prio = current_priority.load(Ordering::Relaxed);
+
+            let old_prio = prio;
+            prio = current_priority.load(Ordering::Relaxed);
             let max_prio = mapper.bucket_span(prio).1;
 
             // estraggo batch dalla coda condivisa
@@ -1225,6 +1267,7 @@ pub fn thread_routine(
                         &mut count,
                         &mut temp,
                         max_prio,
+                        old_prio,
                         &mut counter,
                         iter,
                         &mut local_queues,
@@ -1242,6 +1285,7 @@ pub fn thread_routine(
                         &mut count,
                         &mut temp,
                         max_prio,
+                        old_prio,
                         &mut counter,
                         iter,
                         &mut local_queues,
@@ -1318,7 +1362,8 @@ pub fn thread_routine(
             .expect("Impossibile aprire file di output");
         writeln!(
             out,
-            "FastK, {}, {}, {:.6}, {:.2}, {:.2}, {}, {}, {}",
+            "{}, {}, {}, {:.6}, {:.2}, {:.2}, {}, {}, {}",
+            alg_name,
             graph_name,
             num_threads,
             start_t.elapsed().as_secs_f64(),
@@ -1345,41 +1390,366 @@ pub fn thread_routine(
     }
 }
 
+#[derive(Parser, Debug)]
+pub struct Args {
+    /// Path del file di input
+    input: String,
+
+    /// Esegue l'esperimento di speedup senza pinning
+    #[arg(long)]
+    speedup_no_pin: bool,
+
+    /// Esegue l'esperimento di speedup con pinning
+    #[arg(long)]
+    speedup_pin: bool,
+
+    /// Esegue l'esperimento di  pinning
+    #[arg(long)]
+    speedup_worst: bool,
+
+    /// Esegue l'esperimento con hyperthreading con 8 e 16 thread
+    #[arg(long)]
+    hyperthreading: bool,
+
+    /// Esegue l'esperimento senza hyperthreading con 8 e 16 thread
+    #[arg(long)]
+    no_hyperthreading: bool,
+
+    /// Testa tutti i parametri con hyperthreading con 8 e 16 thread (batch size, vgc threshold, target batches per subiteration)
+    #[arg(long)]
+    test_all_parameters_ht: bool,
+
+    /// Testa tutti i parametri senza hyperthreading con 8, 16, 32 e 64 thread (batch size, vgc threshold, target batches per subiteration)
+    #[arg(long)]
+    test_all_parameters_no_ht: bool,
+
+    /// Esperimento con i parametri dati da linea di comando senza hyperthreading
+    #[arg(long)]
+    normal_run: bool,
+
+    /// Esegue tutti gli esperimenti disponibili
+    #[arg(long)]
+    all: bool,
+
+    /// Setta il numero di thread per l'esperimento
+    #[arg(long, default_value_t = 8)]
+    threads: usize,
+
+    /// Setta la dimensione massima del batch per l'esperimento
+    #[arg(long, default_value_t = 1024)]
+    batch_size: usize,
+
+    /// Setta il numero massimo di batch per sottoiterazione
+    #[arg(long, default_value_t = 10)]
+    target_batches_per_subiteration: usize,
+
+    /// Setta la soglia VGC per l'esperimento
+    #[arg(long, default_value_t = 0)]
+    vgc_threshold: usize,
+}
+
 fn main() -> std::io::Result<()> {
     // leggo file su cui fare esperimenti, è passato da linea di comando
+    let args = Args::parse();
 
-    // leggo il file di input
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        println!("1 argomento: file di input del grafo");
-        return Ok(());
+    let mut graph = Graph::parse_file(&args.input, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
+
+    if args.all || args.speedup_no_pin {
+        speedup_no_pin(&args, &mut graph)?;
     }
-    // test di speedup
-    speedup_test(&args[1])?;
+
+    if args.all || args.speedup_pin {
+        speedup_pin_ht(&args, &mut graph)?;
+        speedup_pin_no_ht(&args, &mut graph)?;
+    }
+
+    if args.all || args.speedup_worst {
+        speedup_worst_cfg(&args, &mut graph)?;
+    }
+
+    if args.all || args.hyperthreading {
+        run_hyperthreading(&args, &mut graph)?;
+    }
+
+    if args.all || args.no_hyperthreading {
+        run_no_hyperthreading(&args, &mut graph)?;
+    }
+
+    if args.all || args.test_all_parameters_ht {
+        run_different_parameters_ht(&mut graph)?;
+    }
+
+    if args.all || args.test_all_parameters_no_ht {
+        run_different_parameters_no_ht(&mut graph)?;
+    }
+
+    if args.all || args.normal_run {
+        run_normal(&args, &mut graph)?;
+    }
 
     Ok(())
 }
 
-pub fn speedup_test(in_file: &str) -> std::io::Result<()> {
+pub fn speedup_no_pin(args: &Args, graph: &Graph) -> std::io::Result<()> {
     // hardcoded file su cui scrivere i risultati
     let out_file = "./results/speedup.csv";
+    let pinning = [usize::MAX; 128];
 
     let num_threads = vec![
         1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128,
     ];
 
-    let vgc_thresholds = vec![0, 64];
-
-    let graph = Graph::parse_file(in_file);
-
-    let times = 2;
+    let times = 3;
 
     for &threads in &num_threads {
-        for &vgc_threshold in &vgc_thresholds {
-            for _ in 0..times {
-                graph.fastk(threads, 1024, vgc_threshold > 0, vgc_threshold, out_file);
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "NoPin",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn speedup_pin_ht(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/speedup.csv";
+    let pinning = pinning_arrays::SAME_CLUSTER_WITH_HYPERTHREADING;
+
+    let num_threads = vec![
+        2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128,
+    ];
+
+    let times = 3;
+
+    for &threads in &num_threads {
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "PinHT",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn speedup_pin_no_ht(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/speedup.csv";
+    let pinning = pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING;
+
+    let num_threads = vec![
+        2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128,
+    ];
+
+    let times = 3;
+
+    for &threads in &num_threads {
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "PinNoHT",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn speedup_worst_cfg(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/speedup.csv";
+    let pinning = [usize::MAX; 128];
+
+    let num_threads = vec![
+        2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128,
+    ];
+
+    let times = 3;
+
+    for &threads in &num_threads {
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "PinWorst",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/pinning_strategies.csv";
+    let pinning = pinning_arrays::SAME_CLUSTER_WITH_HYPERTHREADING;
+
+    let num_threads = vec![8, 16];
+
+    let times = 3;
+
+    for &threads in &num_threads {
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "HT",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_no_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/pinning_strategies.csv";
+    let pinning = pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING;
+
+    let num_threads = vec![8, 16];
+
+    let times = 3;
+
+    for &threads in &num_threads {
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "noHT",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_different_parameters_no_ht(graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/parameters.csv";
+    let pinning = pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING;
+
+    let num_threads = vec![8, 16, 32, 64];
+    let batch_sizes = vec![1, 16, 64, 256, 1024];
+    let vgc_thresholds = vec![0, 4, 16, 64, 256];
+    let batches_per_subiter = vec![1, 5, 10, 20];
+
+    let times = 3;
+
+    for &threads in &num_threads {
+        for &batch_size in &batch_sizes {
+            for &vgc_threshold in &vgc_thresholds {
+                for &target_batches in &batches_per_subiter {
+                    for _ in 0..times {
+                        graph.fastk(
+                            threads,
+                            batch_size,
+                            vgc_threshold > 0,
+                            vgc_threshold,
+                            out_file,
+                            target_batches,
+                            &pinning,
+                            "noHT",
+                        );
+                    }
+                }
             }
         }
+    }
+
+    Ok(())
+}
+
+pub fn run_different_parameters_ht(graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/parameters.csv";
+    let pinning = pinning_arrays::SAME_CLUSTER_WITH_HYPERTHREADING;
+
+    let num_threads = vec![8, 16, 32, 64];
+    let batch_sizes = vec![1, 16, 64, 256, 1024];
+    let vgc_thresholds = vec![0, 4, 16, 64, 256];
+    let batches_per_subiter = vec![1, 5, 10, 20];
+
+    let times = 3;
+
+    for &threads in &num_threads {
+        for &batch_size in &batch_sizes {
+            for &vgc_threshold in &vgc_thresholds {
+                for &target_batches in &batches_per_subiter {
+                    for _ in 0..times {
+                        graph.fastk(
+                            threads,
+                            batch_size,
+                            vgc_threshold > 0,
+                            vgc_threshold,
+                            out_file,
+                            target_batches,
+                            &pinning,
+                            "noHT",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_normal(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/final_runs.csv";
+    let pinning = pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING;
+
+    let times = 3;
+
+    for _ in 0..times {
+        graph.fastk(
+            args.threads,
+            args.batch_size,
+            args.vgc_threshold > 0,
+            args.vgc_threshold,
+            out_file,
+            args.target_batches_per_subiteration,
+            &pinning,
+            "HT",
+        );
     }
 
     Ok(())
@@ -1394,6 +1764,7 @@ pub fn compute_index(
     count: &mut Vec<u32>,
     temp: &mut Vec<(usize, u32)>,
     current_prio: usize,
+    old_prio: usize,
     counter: &mut usize,
     iter: u16,
     dual: &mut DualLocalPQ,
@@ -1453,6 +1824,7 @@ pub fn compute_index(
                 if crossed {
                     dual.push_node(
                         estab::estimate(estab_v) as usize,
+                        old_prio,
                         v,
                         nodes.degree_of(v) as usize,
                         nodes.get_last_update(v),
@@ -1469,6 +1841,7 @@ pub fn compute_index(
             count,
             temp,
             current_prio,
+            old_prio,
             counter,
             iter,
             dual,
@@ -1486,6 +1859,7 @@ pub fn compute_index(
             if crossed {
                 dual.push_node(
                     estab::estimate(estab_v) as usize,
+                    old_prio,
                     v,
                     nodes.degree_of(v) as usize,
                     nodes.get_last_update(v),
@@ -1507,4 +1881,19 @@ fn _write_to_file(path: &str, core: Vec<u32>) -> std::io::Result<()> {
         writeln!(file, "{}", u)?;
     }
     Ok(())
+}
+
+/// Pinna il thread corrente al core logico indicato da pinning[tid].
+pub fn pin_thread_strict(tid: usize, pinning: &[usize]) {
+    assert!(
+        tid < pinning.len(),
+        "Thread id {} fuori dai limiti della slice di pinning (len = {})",
+        tid,
+        pinning.len()
+    );
+
+    let cpu_id = pinning[tid];
+    let core_id = CoreId { id: cpu_id };
+
+    core_affinity::set_for_current(core_id);
 }

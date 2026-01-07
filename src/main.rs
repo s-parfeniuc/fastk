@@ -1,9 +1,7 @@
 #![allow(dead_code)]
 #![warn(unused_variables)]
-use core::num;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngCore, SeedableRng};
-use rayon::{range_inclusive, vec};
 use std::cmp;
 use std::cmp::max;
 use std::collections::VecDeque;
