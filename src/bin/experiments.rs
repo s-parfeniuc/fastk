@@ -1173,12 +1173,6 @@ pub fn thread_routine(
 
     // Pinning..
     if pinning[tid] != usize::MAX {
-        println!(
-            "Pinning thread {} to core {} != {}",
-            tid,
-            pinning[tid],
-            usize::MAX
-        );
         pin_thread_strict(tid, pinning);
     }
 
@@ -1478,11 +1472,11 @@ fn main() -> std::io::Result<()> {
     }
 
     if args.all || args.test_all_parameters_ht {
-        run_different_parameters_ht(&mut graph)?;
+        run_different_parameters_ht(&args, &mut graph)?;
     }
 
     if args.all || args.test_all_parameters_no_ht {
-        run_different_parameters_no_ht(&mut graph)?;
+        run_different_parameters_no_ht(&args, &mut graph)?;
     }
 
     if args.all || args.normal_run {
@@ -1662,7 +1656,7 @@ pub fn run_no_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> 
     Ok(())
 }
 
-pub fn run_different_parameters_no_ht(graph: &Graph) -> std::io::Result<()> {
+pub fn run_different_parameters_no_ht(args: &Args, graph: &Graph) -> std::io::Result<()> {
     // hardcoded file su cui scrivere i risultati
     let out_file = "./results/parameters.csv";
     let pinning = pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING;
@@ -1676,21 +1670,45 @@ pub fn run_different_parameters_no_ht(graph: &Graph) -> std::io::Result<()> {
 
     for &threads in &num_threads {
         for &batch_size in &batch_sizes {
-            for &vgc_threshold in &vgc_thresholds {
-                for &target_batches in &batches_per_subiter {
-                    for _ in 0..times {
-                        graph.fastk(
-                            threads,
-                            batch_size,
-                            vgc_threshold > 0,
-                            vgc_threshold,
-                            out_file,
-                            target_batches,
-                            &pinning,
-                            "noHT",
-                        );
-                    }
-                }
+            for _ in 0..times {
+                graph.fastk(
+                    threads,
+                    batch_size,
+                    args.vgc_threshold > 0,
+                    args.vgc_threshold,
+                    out_file,
+                    args.target_batches_per_subiteration,
+                    &pinning,
+                    "noHT",
+                );
+            }
+        }
+        for &vgc_threshold in &vgc_thresholds {
+            for _ in 0..times {
+                graph.fastk(
+                    threads,
+                    args.batch_size,
+                    vgc_threshold > 0,
+                    vgc_threshold,
+                    out_file,
+                    args.target_batches_per_subiteration,
+                    &pinning,
+                    "noHT",
+                );
+            }
+        }
+        for &target_batches in &batches_per_subiter {
+            for _ in 0..times {
+                graph.fastk(
+                    threads,
+                    args.batch_size,
+                    args.vgc_threshold > 0,
+                    args.vgc_threshold,
+                    out_file,
+                    target_batches,
+                    &pinning,
+                    "noHT",
+                );
             }
         }
     }
@@ -1698,7 +1716,7 @@ pub fn run_different_parameters_no_ht(graph: &Graph) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn run_different_parameters_ht(graph: &Graph) -> std::io::Result<()> {
+pub fn run_different_parameters_ht(args: &Args, graph: &Graph) -> std::io::Result<()> {
     // hardcoded file su cui scrivere i risultati
     let out_file = "./results/parameters.csv";
     let pinning = pinning_arrays::SAME_CLUSTER_WITH_HYPERTHREADING;
@@ -1712,21 +1730,45 @@ pub fn run_different_parameters_ht(graph: &Graph) -> std::io::Result<()> {
 
     for &threads in &num_threads {
         for &batch_size in &batch_sizes {
-            for &vgc_threshold in &vgc_thresholds {
-                for &target_batches in &batches_per_subiter {
-                    for _ in 0..times {
-                        graph.fastk(
-                            threads,
-                            batch_size,
-                            vgc_threshold > 0,
-                            vgc_threshold,
-                            out_file,
-                            target_batches,
-                            &pinning,
-                            "noHT",
-                        );
-                    }
-                }
+            for _ in 0..times {
+                graph.fastk(
+                    threads,
+                    batch_size,
+                    args.vgc_threshold > 0,
+                    args.vgc_threshold,
+                    out_file,
+                    args.target_batches_per_subiteration,
+                    &pinning,
+                    "HT",
+                );
+            }
+        }
+        for &vgc_threshold in &vgc_thresholds {
+            for _ in 0..times {
+                graph.fastk(
+                    threads,
+                    args.batch_size,
+                    vgc_threshold > 0,
+                    vgc_threshold,
+                    out_file,
+                    args.target_batches_per_subiteration,
+                    &pinning,
+                    "HT",
+                );
+            }
+        }
+        for &target_batches in &batches_per_subiter {
+            for _ in 0..times {
+                graph.fastk(
+                    threads,
+                    args.batch_size,
+                    args.vgc_threshold > 0,
+                    args.vgc_threshold,
+                    out_file,
+                    target_batches,
+                    &pinning,
+                    "HT",
+                );
             }
         }
     }
