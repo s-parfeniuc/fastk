@@ -1442,6 +1442,7 @@ fn main() -> std::io::Result<()> {
 
     let mut graph = Graph::parse_file(&args.input, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
 
+    pin_test(&args, &graph)?;
     if args.all || args.speedup_no_pin {
         speedup_no_pin(&args, &mut graph)?;
     }
@@ -1946,4 +1947,27 @@ pub fn pin_thread_strict(tid: usize, pinning: &[usize]) {
     let core_id = CoreId { id: cpu_id };
 
     core_affinity::set_for_current(core_id);
+}
+
+pub fn pin_test(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/final_runs.csv";
+    let pinning = pinning_arrays::TEST;
+
+    let times = 3;
+
+    for _ in 0..times {
+        graph.fastk(
+            args.threads,
+            args.batch_size,
+            args.vgc_threshold > 0,
+            args.vgc_threshold,
+            out_file,
+            args.target_batches_per_subiteration,
+            &pinning,
+            "HT",
+        );
+    }
+
+    Ok(())
 }

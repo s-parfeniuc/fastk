@@ -81,6 +81,19 @@ const NODE7_CORES: [(usize, usize); 8] = [
 
 type NumaNode = [(usize, usize); 8];
 
+// test configuration with first 12 cores set to 0..11 and the rest to 0
+const fn test() -> [usize; 128] {
+    let mut out = [0; 128];
+    let mut i = 0;
+    while i < 12 {
+        out[i] = 12 - i;
+        i += 1;
+    }
+    out
+}
+
+pub const TEST: [usize; 128] = test();
+
 /// Return an array of 128 usize, where the first 64 elements are the first logical cores of the nodes in cluster0 and cluster1, and the last 64 elements are the second logical cores of the nodes in cluster0 and cluster1.
 const fn same_cluster_no_ht(cluster0: [&NumaNode; 4], cluster1: [&NumaNode; 4]) -> [usize; 128] {
     let mut out = [0usize; 128];
