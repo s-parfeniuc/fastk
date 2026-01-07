@@ -1,1 +1,22 @@
 algorithm, graph, num_threads, time (s), work, speed, vgc_threshold, batch_size, batches_per_subiter
+HT, web-Stanford, 8, 0.096820, 1.79, 73.88, 0, 1024, 80
+HT, web-Stanford, 8, 0.097226, 1.77, 72.39, 0, 1024, 80
+HT, web-Stanford, 8, 0.098443, 1.78, 71.92, 0, 1024, 80
+HT, web-BerkStan, 12, 0.104847, 1.55, 197.06, 32, 1024, 120
+HT, web-BerkStan, 12, 0.101601, 1.57, 205.19, 32, 1024, 120
+HT, web-BerkStan, 12, 0.108930, 1.57, 191.48, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 1.692628, 3.10, 157.05, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 1.602764, 3.09, 165.28, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 1.616435, 3.09, 163.83, 32, 1024, 120
+HT, soc-orkut, 12, 5.713965, 4.90, 182.27, 32, 1024, 120
+HT, soc-orkut, 12, 5.787435, 4.86, 178.48, 32, 1024, 120
+HT, soc-orkut, 12, 5.808219, 4.89, 178.92, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 2.068352, 3.10, 128.40, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 1.967990, 3.10, 134.89, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 1.992721, 3.10, 133.21, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 0.798446, 3.07, 329.75, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 0.772075, 3.06, 339.67, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 0.780269, 3.05, 335.52, 32, 1024, 120
+HT, soc-LiveJournal1, 12, 0.766194, 3.07, 343.04, 64, 1024, 120
+HT, soc-LiveJournal1, 12, 0.769257, 3.07, 341.91, 64, 1024, 120
+HT, soc-LiveJournal1, 12, 0.781709, 3.07, 336.07, 64, 1024, 120

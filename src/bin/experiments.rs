@@ -1452,6 +1452,8 @@ fn main() -> std::io::Result<()> {
     // leggo file su cui fare esperimenti, è passato da linea di comando
     let args = Args::parse();
 
+    pin_thread_strict(0, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
+
     let mut graph = Graph::parse_file(&args.input, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
 
     if args.all || args.speedup_no_pin {
@@ -1893,6 +1895,10 @@ pub fn pin_thread_strict(tid: usize, pinning: &[usize]) {
     );
 
     let cpu_id = pinning[tid];
+    if core_affinity::get_core_ids().unwrap().len() != 128 {
+        return;
+    }
+
     let core_id = CoreId { id: cpu_id };
 
     core_affinity::set_for_current(core_id);
