@@ -12,6 +12,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
+use std::pin;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{atomic::AtomicBool, Arc, Barrier};
@@ -1067,6 +1068,7 @@ impl Graph {
         pinning: &[usize; 128],
         alg_name: &str,
     ) {
+        pin_thread_strict(0, pinning);
         let batch_budget = BatchBudget {
             min_nodes: 1,
             max_nodes: chunk_size, // cardinalità massima per batch
@@ -1481,7 +1483,7 @@ fn main() -> std::io::Result<()> {
 pub fn speedup_no_pin(args: &Args, graph: &Graph) -> std::io::Result<()> {
     // hardcoded file su cui scrivere i risultati
     let out_file = "./results/speedup.csv";
-    let pinning = [usize::MAX; 128];
+    let pinning = [500; 128];
 
     let num_threads = vec![
         1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128,
