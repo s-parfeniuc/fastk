@@ -1073,14 +1073,6 @@ impl Graph {
             max_edges: self.avg_deg as usize * chunk_size, // budget in archi per batch
         };
 
-        // Pinning del thread, perché alloca strutture dati condivise
-        #[cfg(target_os = "linux")]
-        {
-            if pinning[0] != usize::MAX {
-                pin_thread_strict(0, pinning);
-            }
-        }
-
         let mapper = ExpoSubBuckets::new(self.max_deg as usize, 512, 64);
 
         let shared_pq = Arc::new(SharedPQ::new(mapper.total_buckets()));
@@ -1950,9 +1942,6 @@ pub fn pin_thread_strict(tid: usize, pinning: &[usize]) {
     );
 
     let cpu_id = pinning[tid];
-    if core_affinity::get_core_ids().unwrap().len() != 128 {
-        return;
-    }
 
     let core_id = CoreId { id: cpu_id };
 

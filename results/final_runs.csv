@@ -1,1 +1,12 @@
-algorithm, graph, num_threads, time (s), work, speed, vgc_threshold, batch_size, batches_per_subiter
+algorithm, graph, num_threads, time (s), work, speed, vgc_threshold, batch_size, batches_per_subiterHT, web-Stanford, 8, 0.041076, 1.75, 169.84, 0, 1024, 80
+HT, web-Stanford, 8, 0.042226, 1.74, 164.66, 0, 1024, 80
+HT, web-Stanford, 8, 0.043245, 1.77, 163.17, 0, 1024, 80
+HT, web-Stanford, 1, 0.066277, 1.72, 103.31, 64, 1024, 10
+HT, web-Stanford, 1, 0.069448, 1.72, 98.59, 64, 1024, 10
+HT, web-Stanford, 1, 0.069463, 1.72, 98.57, 64, 1024, 10
+HT, web-Stanford, 12, 0.024130, 1.78, 293.45, 64, 1024, 120
+HT, web-Stanford, 12, 0.025415, 1.82, 284.65, 64, 1024, 120
+HT, web-Stanford, 12, 0.024558, 1.81, 294.38, 64, 1024, 120
+HT, web-Stanford, 3, 0.033994, 1.76, 206.08, 64, 1024, 30
+HT, web-Stanford, 3, 0.035550, 1.71, 191.41, 64, 1024, 30
+HT, web-Stanford, 3, 0.033731, 1.75, 206.94, 64, 1024, 30
