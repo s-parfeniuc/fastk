@@ -1496,8 +1496,10 @@ pub fn speedup_no_pin(args: &Args, graph: &Graph) -> std::io::Result<()> {
     ];
 
     let times = 3;
+    println!("Starting speedup no pinning experiment...");
 
     for &threads in &num_threads {
+        println!("  {} threads...", threads);
         for _ in 0..times {
             graph.fastk(
                 threads,
@@ -1525,8 +1527,9 @@ pub fn speedup_pin_ht(args: &Args, graph: &Graph) -> std::io::Result<()> {
     ];
 
     let times = 3;
-
+    println!("Starting speedup pinning with hyperthreading experiment...");
     for &threads in &num_threads {
+        println!("  {} threads...", threads);
         for _ in 0..times {
             graph.fastk(
                 threads,
@@ -1554,8 +1557,9 @@ pub fn speedup_pin_no_ht(args: &Args, graph: &Graph) -> std::io::Result<()> {
     ];
 
     let times = 3;
-
+    println!("Starting speedup pinning without hyperthreading experiment...");
     for &threads in &num_threads {
+        println!("  {} threads...", threads);
         for _ in 0..times {
             graph.fastk(
                 threads,
@@ -1583,8 +1587,9 @@ pub fn speedup_worst_cfg(args: &Args, graph: &Graph) -> std::io::Result<()> {
     ];
 
     let times = 3;
-
+    println!("Starting speedup worst-case pinning experiment...");
     for &threads in &num_threads {
+        println!("  {} threads...", threads);
         for _ in 0..times {
             graph.fastk(
                 threads,
@@ -1610,8 +1615,9 @@ pub fn run_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> {
     let num_threads = vec![8, 16];
 
     let times = 3;
-
+    println!("Starting hyperthreading experiment...");
     for &threads in &num_threads {
+        println!("  {} threads...", threads);
         for _ in 0..times {
             graph.fastk(
                 threads,
@@ -1637,8 +1643,9 @@ pub fn run_no_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> 
     let num_threads = vec![8, 16];
 
     let times = 3;
-
+    println!("Starting no hyperthreading experiment...");
     for &threads in &num_threads {
+        println!("  {} threads...", threads);
         for _ in 0..times {
             graph.fastk(
                 threads,
@@ -1667,9 +1674,10 @@ pub fn run_different_parameters_no_ht(args: &Args, graph: &Graph) -> std::io::Re
     let batches_per_subiter = vec![1, 5, 10, 20];
 
     let times = 3;
-
+    println!("Starting parameters hyperthreading experiment...");
     for &threads in &num_threads {
         for &batch_size in &batch_sizes {
+            println!("  {} threads, batch size {}...", threads, batch_size);
             for _ in 0..times {
                 graph.fastk(
                     threads,
@@ -1684,6 +1692,7 @@ pub fn run_different_parameters_no_ht(args: &Args, graph: &Graph) -> std::io::Re
             }
         }
         for &vgc_threshold in &vgc_thresholds {
+            println!("  {} threads, vgc threshold {}...", threads, vgc_threshold);
             for _ in 0..times {
                 graph.fastk(
                     threads,
@@ -1698,6 +1707,10 @@ pub fn run_different_parameters_no_ht(args: &Args, graph: &Graph) -> std::io::Re
             }
         }
         for &target_batches in &batches_per_subiter {
+            println!(
+                "  {} threads, target batches per subiteration {}...",
+                threads, target_batches
+            );
             for _ in 0..times {
                 graph.fastk(
                     threads,
