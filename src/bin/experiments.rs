@@ -1064,7 +1064,7 @@ impl Graph {
         pinning: &[usize; 128],
         alg_name: &str,
     ) {
-        pin_thread_strict(0, pinning);
+        pin_thread_strict(0, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
 
         let batch_budget = BatchBudget {
             min_nodes: 1,
@@ -1168,7 +1168,6 @@ pub fn thread_routine(
     if pinning[tid] != usize::MAX {
         pin_thread_strict(tid, pinning);
     }
-    println!("pinned thread {} to core {}", tid, pinning[tid]);
 
     let target_batches_per_subiteration = num_threads * target_batches_per_subiter;
 
