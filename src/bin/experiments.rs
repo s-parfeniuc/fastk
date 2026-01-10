@@ -1,9 +1,10 @@
 #![warn(dead_code)]
-
 use clap::Parser;
 use concurrent_queue::ConcurrentQueue;
 use core_affinity::CoreId;
 use fastk::pinning_arrays;
+use libc::CPU_SETSIZE;
+use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::fs::File;
@@ -11,6 +12,7 @@ use std::fs::OpenOptions;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
+use std::mem::zeroed;
 use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -1064,7 +1066,11 @@ impl Graph {
         pinning: &[usize; 128],
         alg_name: &str,
     ) {
-        pin_thread_strict(0, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
+        if pinning[0] != usize::MAX {
+            pin_thread_strict(0, pinning);
+        } else {
+            unpin_thread();
+        }
 
         let batch_budget = BatchBudget {
             min_nodes: 1,
@@ -1972,17 +1978,27 @@ pub fn pin_test(args: &Args, graph: &Graph) -> std::io::Result<()> {
     Ok(())
 }
 
-fn unpin_thread() {
-    use libc::{cpu_set_t, sched_getaffinity, sched_setaffinity};
+/// Imposta l'affinità del thread corrente a tutti i core
+/// rappresentabili dalla cpu_set_t (verranno poi filtrati dal kernel).
+pub fn unpin_thread() {
     unsafe {
-        let mut set: cpu_set_t = std::mem::zeroed();
+        let mut cpuset: cpu_set_t = zeroed();
 
-        let res = sched_getaffinity(0, std::mem::size_of::<cpu_set_t>(), &mut set);
+        // Inizializza la maschera vuota
+        CPU_ZERO(&mut cpuset);
 
-        assert!(res == 0, "sched_getaffinity failed");
+        // Aggiunge incrementalmente tutti i core rappresentabili
+        for cpu_id in 0..CPU_SETSIZE {
+            CPU_SET(cpu_id as usize, &mut cpuset);
+        }
 
-        let res = sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set);
+        // Applica la maschera al thread corrente
+        let ret = sched_setaffinity(
+            0, // 0 = thread corrente
+            std::mem::size_of::<cpu_set_t>(),
+            &cpuset as *const cpu_set_t,
+        );
 
-        assert!(res == 0, "sched_setaffinity failed");
+        assert!(ret == 0, "sched_setaffinity fallita");
     }
 }
