@@ -12,7 +12,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
-use std::pin;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{atomic::AtomicBool, Arc, Barrier};
@@ -977,11 +976,8 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub fn parse_file(path: &str, pinning: &[usize; 128]) -> Self {
+    pub fn parse_file(path: &str) -> Self {
         let file = BufReader::new(File::open(path).expect("File inesistente"));
-        if pinning[0] != usize::MAX {
-            pin_thread_strict(0, pinning);
-        }
 
         let mut edges: Vec<(u32, u32)> = vec![];
         let mut max_node = 0;
@@ -1069,6 +1065,7 @@ impl Graph {
         alg_name: &str,
     ) {
         pin_thread_strict(0, pinning);
+
         let batch_budget = BatchBudget {
             min_nodes: 1,
             max_nodes: chunk_size, // cardinalità massima per batch
@@ -1095,6 +1092,8 @@ impl Graph {
         let edges_processed = Arc::new(AtomicUsize::new(0));
 
         let info = Arc::new(InfoStore::new(self.num_nodes as usize));
+
+        unpin_thread();
 
         thread::scope(|scope| {
             for tid in 0..num_threads {
@@ -1169,6 +1168,7 @@ pub fn thread_routine(
     if pinning[tid] != usize::MAX {
         pin_thread_strict(tid, pinning);
     }
+    println!("pinned thread {} to core {}", tid, pinning[tid]);
 
     let target_batches_per_subiteration = num_threads * target_batches_per_subiter;
 
@@ -1363,7 +1363,7 @@ pub fn thread_routine(
         )
         .expect("Impossibile scrivere sul file di output");
         println!(
-            "[VGC: {}] Archi: {}, iterazioni: {}, sottoiterazioni totali: {}, archi anticipati: {}",
+            "[VGC: {}] Archi: {}, iterazioni: {}, sottoiterazioni totali: {}, counter: {}",
             vgc_t,
             edges_processed.load(Ordering::Relaxed) as f64 / offsets[offsets.len() - 1] as f64,
             iter,
@@ -1442,7 +1442,7 @@ fn main() -> std::io::Result<()> {
 
     pin_thread_strict(0, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
 
-    let mut graph = Graph::parse_file(&args.input, &pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING);
+    let mut graph = Graph::parse_file(&args.input);
 
     if args.all || args.speedup_no_pin {
         speedup_no_pin(&args, &mut graph)?;
@@ -1483,7 +1483,7 @@ fn main() -> std::io::Result<()> {
 pub fn speedup_no_pin(args: &Args, graph: &Graph) -> std::io::Result<()> {
     // hardcoded file su cui scrivere i risultati
     let out_file = "./results/speedup.csv";
-    let pinning = [500; 128];
+    let pinning = [usize::MAX; 128];
 
     let num_threads = vec![
         1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128,
@@ -1971,4 +1971,19 @@ pub fn pin_test(args: &Args, graph: &Graph) -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn unpin_thread() {
+    use libc::{cpu_set_t, sched_getaffinity, sched_setaffinity};
+    unsafe {
+        let mut set: cpu_set_t = std::mem::zeroed();
+
+        let res = sched_getaffinity(0, std::mem::size_of::<cpu_set_t>(), &mut set);
+
+        assert!(res == 0, "sched_getaffinity failed");
+
+        let res = sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set);
+
+        assert!(res == 0, "sched_setaffinity failed");
+    }
 }
