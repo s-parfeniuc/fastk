@@ -1429,11 +1429,11 @@ pub struct Args {
     threads: usize,
 
     /// Setta la dimensione massima del batch per l'esperimento
-    #[arg(long, default_value_t = 1024)]
+    #[arg(long, default_value_t = 64)]
     batch_size: usize,
 
     /// Setta il numero massimo di batch per sottoiterazione
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 7)]
     target_batches_per_subiteration: usize,
 
     /// Setta la soglia VGC per l'esperimento
@@ -1611,7 +1611,7 @@ pub fn run_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> {
     let out_file = "./results/pinning_strategies.csv";
     let pinning = pinning_arrays::SAME_CLUSTER_WITH_HYPERTHREADING;
 
-    let num_threads = vec![8, 16, 32, 64];
+    let num_threads = vec![16, 32, 64];
 
     let times = 3;
     println!("Starting hyperthreading experiment...");
@@ -1639,7 +1639,7 @@ pub fn run_no_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> 
     let out_file = "./results/pinning_strategies.csv";
     let pinning = pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING;
 
-    let num_threads = vec![8, 16];
+    let num_threads = vec![16, 32, 64];
 
     let times = 3;
     println!("Starting no hyperthreading experiment...");
@@ -1668,9 +1668,9 @@ pub fn run_different_parameters_no_ht(args: &Args, graph: &Graph) -> std::io::Re
     let pinning = pinning_arrays::SAME_CLUSTER_NO_HYPERTHREADING;
 
     let num_threads = vec![8, 16];
-    let batch_sizes = vec![1, 16, 64, 256, 1024];
-    let vgc_thresholds = vec![0, 4, 16, 64, 256];
-    let batches_per_subiter = vec![1, 5, 10, 20];
+    let batch_sizes = vec![16, 64, 256, 1024];
+    let vgc_thresholds = vec![0, 16, 64, 128, 256];
+    let batches_per_subiter = vec![3, 5, 7, 10];
 
     let times = 3;
     println!("Starting parameters hyperthreading experiment...");
