@@ -2335,8 +2335,6 @@ pub fn write_file(coreness: Vec<usize>, file_path: &str) -> Result<(), std::io::
 fn main() -> io::Result<()> {
     // gestione argomenti passati da linea di comando: in_file (file da parsare) e out_file (file su cui scrivere la coreness dei nodi)
     let args: Vec<String> = std::env::args().collect();
-    sgama_grafi();
-    return Ok(());
     if args.len() < 3 || args.len() > 5 {
         println!("2 argomenti: file di input e file in cui scrivere, -t opzionale per settare il numero di thread");
         return Ok(());
@@ -2347,8 +2345,10 @@ fn main() -> io::Result<()> {
 
     let mut coreness: Vec<usize> = Vec::new();
     let mut start = Instant::now();
-    //let mut graph = Graph::new();
-    //graph.read_file(in_file)?;
+    let mut graph = Graph::new();
+    graph.read_file(in_file)?;
+
+    graph.compute_coreness_iter_sync_opti2((1.0, 0.0), &mut 0.0, true);
 
     let mut edges = 3000;
     let nodes = 150;

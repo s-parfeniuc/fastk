@@ -1335,6 +1335,11 @@ fn main() -> std::io::Result<()> {
     let mut coreness: Vec<u32> = Vec::new();
     let start = Instant::now();
     let graph = Graph::parse_file(in_file);
+    println!(
+        "Nodi: {}, archi: {}",
+        graph.num_nodes,
+        graph.neighbors.len()
+    );
 
     // leggo il secondo argomento e metto nel vettore coreness quello che leggo su ogni riga
     let reader = BufReader::new(File::open(out_file)?);

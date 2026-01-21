@@ -1420,6 +1420,14 @@ pub struct Args {
     #[arg(long)]
     normal_run: bool,
 
+    /// Esperimento per arm
+    #[arg(long)]
+    arm: bool,
+
+    /// Esperimento per worst pinning
+    #[arg(long)]
+    worst_pinning: bool,
+
     /// Esegue tutti gli esperimenti disponibili
     #[arg(long)]
     all: bool,
@@ -1478,6 +1486,14 @@ fn main() -> std::io::Result<()> {
         run_different_parameters_no_ht(&args, &mut graph)?;
     }
 
+    if args.all || args.arm {
+        run_arm(&args, &mut graph)?;
+    }
+
+    if args.all || args.worst_pinning {
+        run_worst_pinning(&args, &mut graph)?;
+    }
+
     if args.all || args.normal_run {
         run_normal(&args, &mut graph)?;
     }
@@ -1491,7 +1507,7 @@ pub fn speedup_no_pin(args: &Args, graph: &Graph) -> std::io::Result<()> {
     let pinning = [usize::MAX; 128];
 
     let num_threads = vec![
-        1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 96, 128,
+        1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 64, 80,
     ];
 
     let times = 3;
@@ -1627,6 +1643,67 @@ pub fn run_hyperthreading(args: &Args, graph: &Graph) -> std::io::Result<()> {
                 args.target_batches_per_subiteration,
                 &pinning,
                 "HT",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_arm(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./final_runs.csv";
+    //pinning per ARM con 0..80 core fisici
+    let pinning: [usize; 128] = (0..128)
+        .map(|i| if i < 80 { i } else { usize::MAX })
+        .collect::<Vec<usize>>()
+        .try_into()
+        .unwrap();
+
+    let num_threads = vec![8, 16, 32, 48, 64, 80];
+
+    let times = 3;
+    println!("Starting ARM no experiment...");
+    for &threads in &num_threads {
+        println!("  {} threads", threads);
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "ARM",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_worst_pinning(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/worst_pinning.csv";
+    let pinning = pinning_arrays::WORST_CONFIG;
+
+    let num_threads = vec![16, 32, 64];
+
+    let times = 3;
+    println!("Starting worst pinning experiment...");
+    for &threads in &num_threads {
+        println!("  {} threads...", threads);
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "WorstPin",
             );
         }
     }
