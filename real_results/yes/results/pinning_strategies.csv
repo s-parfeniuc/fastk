@@ -1,4 +1,4 @@
-algorithm, graph, num_threads, time (s), work, speed, vgc_threshold, batch_size, batches_per_subiter
+algorithm,graph,num_threads,time (s),work,speed,vgc_threshold,batch_size,batches_per_subiter
 HT, tech-p2p, 16, 10.256234, 5.88, 169.53, 0, 64, 112
 HT, tech-p2p, 16, 10.505450, 5.89, 165.87, 0, 64, 112
 HT, tech-p2p, 16, 9.821973, 5.88, 176.88, 0, 64, 112

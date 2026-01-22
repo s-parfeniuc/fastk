@@ -1428,6 +1428,10 @@ pub struct Args {
     #[arg(long)]
     worst_pinning: bool,
 
+    /// Esperimento senza pinning
+    #[arg(long)]
+    no_pinning: bool,
+
     /// Esegue tutti gli esperimenti disponibili
     #[arg(long)]
     all: bool,
@@ -1492,6 +1496,10 @@ fn main() -> std::io::Result<()> {
 
     if args.all || args.worst_pinning {
         run_worst_pinning(&args, &mut graph)?;
+    }
+
+    if args.all || args.no_pinning {
+        run_no_pin(&args, &mut graph)?;
     }
 
     if args.all || args.normal_run {
@@ -1883,6 +1891,34 @@ pub fn run_normal(args: &Args, graph: &Graph) -> std::io::Result<()> {
             &pinning,
             "HT",
         );
+    }
+
+    Ok(())
+}
+
+pub fn run_no_pin(args: &Args, graph: &Graph) -> std::io::Result<()> {
+    // hardcoded file su cui scrivere i risultati
+    let out_file = "./results/pinning_strategies.csv";
+    let pinning = [usize::MAX; 128];
+
+    let num_threads = vec![16, 32, 64];
+
+    let times = 3;
+    println!("Starting no pin experiment...");
+    for &threads in &num_threads {
+        println!("  {} threads...", threads);
+        for _ in 0..times {
+            graph.fastk(
+                threads,
+                args.batch_size,
+                args.vgc_threshold > 0,
+                args.vgc_threshold,
+                out_file,
+                args.target_batches_per_subiteration,
+                &pinning,
+                "NoPin",
+            );
+        }
     }
 
     Ok(())
